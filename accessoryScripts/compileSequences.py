@@ -27,6 +27,7 @@ import tarfile
 ################################################
 entries = 0
 footprints = {} # chr -> [footprint, ... ] - ordered by genomic region
+# Get this file from ftp://ftp.ebi.ac.uk/pub/databases/ensembl/encode/supplementary/integration_data_jan2011/byDataType/footprints/jan2011/
 inFile = open('combined.fps','r')
 # Read in line by line and build footprints dictionary
 while 1:
@@ -69,9 +70,11 @@ print 'Footprints =',entries,'; Merged = ',entMerg,'; Merge Length = 6'
 ##########################
 print '  Extracting the sequence data...'
 # Unzip sequences for extraction
-#tar = tarfile.open('sequences/fasta/chromFa.tar.gz')
-#tar.extractall(path='sequences/fasta')
-#tar.close()
+# The footprints are all in hg19 coordinates
+# Need to get sequences from ftp://hgdownload.cse.ucsc.edu/goldenPath/hg19/bigZips/chromFa.tar.gz
+tar = tarfile.open('sequences/fasta/chromFa.tar.gz')
+tar.extractall(path='sequences/fasta')
+tar.close()
 
 # 6. Extract the sequences
 for chrom in fpMerged:
