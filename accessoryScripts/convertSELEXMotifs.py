@@ -1,51 +1,38 @@
-import cPickle, os, re
+import cPickle
 from pssm import pssm
 from copy import deepcopy
-from multiprocessing import Pool, cpu_count, Manager
-from subprocess import *
 
 # Make the files for a TomTom run
-def makeQueryFile(nucFreqs, queryPssms, num, strands='+ -'):
+def makeFiles(nucFreqs, queryPssms, targetPssms, num, strands='+ -'):
     # Header crap
     memeHeader = ''
-    memeHeader += 'MEME version 4\n\n'
+    memeHeader += 'MEME version 3.0\n\n'
     memeHeader += 'ALPHABET= ACGT\n\n'
     # Here is where we tell it what strand: for miRNAs this would just be '+'
     memeHeader += 'strands: '+strands+'\n\n'
-    memeHeader += 'Background letter frequencies\n'
+    memeHeader += 'Background letter frequencies (from dataset with add-one prior applied):\n'
     memeHeader += 'A '+str(round(float(nucFreqs['A']),3))+' C '+str(round(float(nucFreqs['C']),3))+' G '+str(round(float(nucFreqs['G']),3))+' T '+str(round(float(nucFreqs['T']),3))
     # Make query PSSM file
     queryFile = open('tmp/query'+str(num)+'.tomtom','w')
     queryFile.write(memeHeader)
-    queryFile.write('\n\n'+'\n\n'.join([pssm1.getMeme4Formatted() for pssm1 in queryPssms]))
+    queryFile.write('\n\n'.join([pssm1.getMemeFormatted() for pssm1 in queryPssms]))
     queryFile.close()
-
-# Make the files for a TomTom run
-def makeTargetFile(nucFreqs, targetPssms, num, strands='+ -'):
-    # Header crap
-    memeHeader = ''
-    memeHeader += 'MEME version 4\n\n'
-    memeHeader += 'ALPHABET= ACGT\n\n'
-    # Here is where we tell it what strand: for miRNAs this would just be '+'
-    memeHeader += 'strands: '+strands+'\n\n'
-    memeHeader += 'Background letter frequencies\n'
-    memeHeader += 'A '+str(round(float(nucFreqs['A']),3))+' C '+str(round(float(nucFreqs['C']),3))+' G '+str(round(float(nucFreqs['G']),3))+' T '+str(round(float(nucFreqs['T']),3))
     # Make target PSSM file
     targetFile = open('tmp/target'+str(num)+'.tomtom','w')
     targetFile.write(memeHeader)
-    targetFile.write('\n\n'+'\n\n'.join([pssm1.getMeme4Formatted() for pssm1 in targetPssms]))
+    targetFile.write('\n\n'.join([pssm1.getMemeFormatted() for pssm1 in targetPssms]))
     targetFile.close()
 
 # Run TomTom on the files
-def TomTom(num, distMeth='ed', qThresh='0.05', minOverlap=6):
+def TomTom(num, distMeth='ed', qThresh='1', minOverlap=6):
     # Arguments for tomtom
-    tomtomArgs = ' -dist '+str(distMeth)+' -o tmp/tomtom_out -text -thresh '+str(qThresh)+' -min-overlap '+str(minOverlap)+' tmp/query'+str(num)+'.tomtom tmp/target'+str(num)+'.tomtom'
+    tomtomArgs = ' -query tmp/query'+str(num)+'.tomtom -target tmp/target'+str(num)+'.tomtom -dist '+str(distMeth)+' -o tmp/tomtom_out -text -q-thresh '+str(qThresh)+' -min-overlap '+str(minOverlap)+' -verbosity 0'
     print tomtomArgs
     #p = Popen("tomtom" + tomtomArgs, shell=True)
     #sts = os.waitpid(p.pid, 0)
     errOut = open('tmp/stderr.out','w')
     tomtomProc = Popen("tomtom" + tomtomArgs, shell=True,stdout=PIPE, stderr=errOut)
-    outputFile = open('tmp/tomtom/tomtom'+str(num)+'.out','w')
+    outputFile = open('tmp/tomtom_out/tomtom'+str(num)+'.out','w')
     output = tomtomProc.communicate()[0]
     outputFile.write(output)
     outputFile.close()
@@ -53,7 +40,7 @@ def TomTom(num, distMeth='ed', qThresh='0.05', minOverlap=6):
 
 # Wrapper function to run TomTom using multiprocessing pool
 def runTomTom(i):
-    TomTom(i, distMeth='ed', qThresh='0.001', minOverlap=6) #blic5
+    TomTom(i, distMeth='ed', qThresh='1', minOverlap=6) #blic5
 
 # 1. Read in de novo motif detected PWMs from systematic SELEX experiments
 inFile = open('selex.csv','r')
@@ -100,99 +87,47 @@ cPickle.dump(selexPSSMs,outFile)
 outFile.close()
 
 # 4. Compare motifs to identify non-redundant set
-if not os.path.exists('tmp/tomtom'):
-    os.makedirs('tmp/tomtom')
 outFile = open('upstreamMotifPermutedPValues.csv','w')
 outFile.write('Motif Name,Region,Original E-Value,Consensus,Permuted E-Value < 10,Similar,Total Permutations,Permuted P-Value')
-pssmsNames = selexPSSMs.keys()
+pssmsNames = pssms.keys()
 print 'Making files...'
-tested = []
 for i in range(len(selexPSSMs)):
-    print pssmsNames[i]
-    if not os.path.exists('tmp/query'+str(i)+'.tomtom'):
-        makeQueryFile(nucFreqs={'A':0.25,'C':0.25,'G':0.25,'T':0.25}, queryPssms=[selexPSSMs[pssmsNames[i]]],num=i)
-    if not os.path.exists('tmp/target'+str(i)+'.tomtom'):
-        targetPSSMs = []
-        p1 = pssmsNames[i].split('_')
-        if not p1[0].upper()+'_'+p1[3]+'_'+p1[4] in tested:
-            tested.append(p1[0].upper()+'_'+p1[3]+'_'+p1[4])
-            for pssm in pssmsNames:
-                p2 = pssm.split('_')
-                if p1[0].upper()==p2[0].upper() and p1[3]==p2[3] and p1[4]==p2[4] and not pssm==pssmsNames[i]:
-                    print 'In.'
-                    
-                    targetPSSMs.append(selexPSSMs[pssm])
-        makeTargetFile(nucFreqs={'A':0.25,'C':0.25,'G':0.25,'T':0.25}, targetPssms=targetPSSMs, num=i)
+    if not os.path.exists('tmp/query'+str(i)+'.tomtom') and not os.path.exists('tmp/target'+str(i)+'.tomtom'):
+        makeFiles(nucFreqs={'A':0.25,'C':0.25,'G':0.25,'T':0.25}, queryPssms=[pssms[pssmsNames[i]]],targetPssms=selexPSSMs,num=100)
 print 'Done.'
 
 # Run this using all cores available
 cpus = cpu_count()
 print 'There are', cpus,'CPUs avialable.' 
-#runTomTom(0)
 pool = Pool(processes=cpus)
-pool.map(runTomTom,range(len(selexPSSMs)))
+pool.map(runTomtom,range(len(pssms)))
 print 'Done with Tomtom runs.\n'
 
-
-print 'Removing redundancy in PSSMs...'
-redundantPSSMs = []
-for run in range(len(selexPSSMs)):
-    # Open file
-    outputFile = open('tmp/tomtom/tomtom'+str(run)+'.out','r')
+print 'Reading in Tomtom run...'
+for run in range(len(pssms)):
+    tomtomPValues = {}
+    outputFile = open('tmp/tomtom_out/tomtom'+str(run)+'.out','r')
     output = outputFile.readlines()
     outputFile.close()
     # Now iterate through output and save data
     output.pop(0) # Get rid of header
-    #Query ID	Target ID	Optimal offset	p-value	E-value	q-value	Overlap	Query consensus	Target consensus	Orientation
-    if len(output)>0:
-        tmpPssms = []
-        # Get ids for redundant motifs
-        for i in range(len(output)):
-            splitUp = output[i].strip().split('\t')
-            if len(tmpPssms)==0:
-                tmpPssms.append(splitUp[0])
-            tmpPssms.append(splitUp[1])
-        # Decision tree for choosing non-redundant examplar
-        # 1. Are there any human TFs?
-        mouseRE = re.compile('^[A-Z][a-z]*$')
-        human = []
-        mouse =  []
-        exemplar = []
-        for pssm1 in tmpPssms:
-            if mouseRE.match(pssm1):
-                mouse.append(pssm1)
-            else:
-                human.append(pssm1)
-        # If ther are human motifs
-        if len(human)>0:
-            # If there is only one human motif
-            if len(human)==1:
-                redundantPSSMs += mouse
-                exemplar = human[0]
-            # If there is more than one human motif
-            else:
-                # Choose full length
-                full = []
-                dbd = []
-                for pssm1 in human:
-                    if pssm1.split('_')[2]=='full':
-                        full.append(pssm1)
-                    else:
-                        dbd.append(pssm1)
-                # If there is a full length clone motif
-                if len(full)>0:
-                    # If there is only one
-                    if len(full)==1:
-                        redundantPSSMs += mouse
-                        redundantPSSMs += dbd
-                        exemplar = full[0]
-                    # If ther are more than one full length clone motif
-                    else:
-                        print 'Fuck. More than one full length clone motif.'
-                else:
-                    print 'Fuck. No full length clone motifs.'
-        else:
-            print 'Fuck. No human motifs.'
-        print exemplar, tmpPssms
-
+    while len(output)>0:
+        outputLine = output.pop(0).strip().split('\t')
+        if len(outputLine)==9:
+            tomtomPValues[outputLine[1]] = float(outputLine[3])
+    pValues = tomtomPValues.values()
+    similar = 0
+    for pValue in pValues:
+        if float(pValue) <= float(0.05):
+            similar += 1
+    # Write out the results
+    mot = outputLine[0].split('_')[1]
+    permPValues[outputLine[0]] = { mot+'.consensus':str(pssms[outputLine[0]].getConsensusMotif()), mot+'.permutedEV<=10':str(len(pValues)), mot+'.similar':str(similar), mot+'.permPV':str(float(similar)/float(1000)) }
+    if outputLine[0] in upstreamMatches.keys():
+        permPValues[outputLine[0]]['motif1.matches'] = ' '.join(upstreamMatches[outputLine[0]])
+        matched += 1
+    else:
+        permPValues[outputLine[0]][mot+'.matches'] = 'NA'
+    outFile.write('\n'+str(outputLine[0])+',upstream,'+str(pssms[outputLine[0]].getEValue())+','+str(pssms[outputLine[0]].getConsensusMotif())+','+str(len(pValues))+','+str(similar)+','+str(1000)+','+str(float(similar)/float(1000)))
+outFile.close()
 
