@@ -1,38 +1,51 @@
-import cPickle
+import cPickle, os, re, math
 from pssm import pssm
 from copy import deepcopy
+from multiprocessing import Pool, cpu_count, Manager
+from subprocess import *
 
 # Make the files for a TomTom run
-def makeFiles(nucFreqs, queryPssms, targetPssms, num, strands='+ -'):
+def makeQueryFile(nucFreqs, queryPssms, num, strands='+ -'):
     # Header crap
     memeHeader = ''
-    memeHeader += 'MEME version 3.0\n\n'
+    memeHeader += 'MEME version 4\n\n'
     memeHeader += 'ALPHABET= ACGT\n\n'
     # Here is where we tell it what strand: for miRNAs this would just be '+'
     memeHeader += 'strands: '+strands+'\n\n'
-    memeHeader += 'Background letter frequencies (from dataset with add-one prior applied):\n'
+    memeHeader += 'Background letter frequencies\n'
     memeHeader += 'A '+str(round(float(nucFreqs['A']),3))+' C '+str(round(float(nucFreqs['C']),3))+' G '+str(round(float(nucFreqs['G']),3))+' T '+str(round(float(nucFreqs['T']),3))
     # Make query PSSM file
     queryFile = open('tmp/query'+str(num)+'.tomtom','w')
     queryFile.write(memeHeader)
-    queryFile.write('\n\n'.join([pssm1.getMemeFormatted() for pssm1 in queryPssms]))
+    queryFile.write('\n\n'+'\n\n'.join([pssm1.getMeme4Formatted() for pssm1 in queryPssms]))
     queryFile.close()
+
+# Make the files for a TomTom run
+def makeTargetFile(nucFreqs, targetPssms, num, strands='+ -'):
+    # Header crap
+    memeHeader = ''
+    memeHeader += 'MEME version 4\n\n'
+    memeHeader += 'ALPHABET= ACGT\n\n'
+    # Here is where we tell it what strand: for miRNAs this would just be '+'
+    memeHeader += 'strands: '+strands+'\n\n'
+    memeHeader += 'Background letter frequencies\n'
+    memeHeader += 'A '+str(round(float(nucFreqs['A']),3))+' C '+str(round(float(nucFreqs['C']),3))+' G '+str(round(float(nucFreqs['G']),3))+' T '+str(round(float(nucFreqs['T']),3))
     # Make target PSSM file
     targetFile = open('tmp/target'+str(num)+'.tomtom','w')
     targetFile.write(memeHeader)
-    targetFile.write('\n\n'.join([pssm1.getMemeFormatted() for pssm1 in targetPssms]))
+    targetFile.write('\n\n'+'\n\n'.join([pssm1.getMeme4Formatted() for pssm1 in targetPssms]))
     targetFile.close()
 
 # Run TomTom on the files
-def TomTom(num, distMeth='ed', qThresh='1', minOverlap=6):
+def TomTom(num, distMeth='ed', qThresh='0.05', minOverlap=6):
     # Arguments for tomtom
-    tomtomArgs = ' -query tmp/query'+str(num)+'.tomtom -target tmp/target'+str(num)+'.tomtom -dist '+str(distMeth)+' -o tmp/tomtom_out -text -q-thresh '+str(qThresh)+' -min-overlap '+str(minOverlap)+' -verbosity 0'
-    print tomtomArgs
+    tomtomArgs = ' -dist '+str(distMeth)+' -o tmp/tomtom_out -text -thresh '+str(qThresh)+' -min-overlap '+str(minOverlap)+' tmp/query'+str(num)+'.tomtom tmp/target'+str(num)+'.tomtom'
+    #print tomtomArgs
     #p = Popen("tomtom" + tomtomArgs, shell=True)
     #sts = os.waitpid(p.pid, 0)
     errOut = open('tmp/stderr.out','w')
     tomtomProc = Popen("tomtom" + tomtomArgs, shell=True,stdout=PIPE, stderr=errOut)
-    outputFile = open('tmp/tomtom_out/tomtom'+str(num)+'.out','w')
+    outputFile = open('tmp/tomtom/tomtom'+str(num)+'.out','w')
     output = tomtomProc.communicate()[0]
     outputFile.write(output)
     outputFile.close()
@@ -40,7 +53,22 @@ def TomTom(num, distMeth='ed', qThresh='1', minOverlap=6):
 
 # Wrapper function to run TomTom using multiprocessing pool
 def runTomTom(i):
-    TomTom(i, distMeth='ed', qThresh='1', minOverlap=6) #blic5
+    TomTom(i, distMeth='ed', qThresh='0.001', minOverlap=6) #blic5
+
+# Method returning the information content of a motif.
+def ic(pssm,norm=True):
+    bgFreq = [0.21, 0.29, 0.29, 0.21]
+    res=0
+    pwm=pssm.getMatrix()
+    for i in range(len(pwm)):
+        res+=2
+        for a in [0,1,2,3]:
+            if pwm[i][a]!=0:
+                if norm==True:
+                    res+=pwm[i][a]*math.log(pwm[i][a]/bgFreq[a],2)
+                else:
+                    res+=pwm[i][a]*math.log(pwm[i][a],2)
+    return res
 
 # 1. Read in de novo motif detected PWMs from systematic SELEX experiments
 inFile = open('selex.csv','r')
@@ -81,53 +109,180 @@ while 1:
 inFile.close()
 print 'PSSMs recovered:',len(selexPSSMs)
 
+# Test to show that the information content produces the expected values
+# The code for this funciton was obtained from the Biopyhton Bio.motif.ic funciton
+#tmpPssm = [[0.05, 0.05, 0.85, 0.05],
+#           [0.85, 0.05, 0.05, 0.05],
+#           [0.05, 0.05, 0.85, 0.05],
+#           [0.65, 0.05, 0.25, 0.05],
+#           [0.85, 0.05, 0.05, 0.05]]
+#testPssm = pssm(biclusterName='test', pssm=deepcopy(tmpPssm), nsites=str(100), eValue=str(0.01))
+#print 'ic.norm = ',ic(testPssm,norm=True)
+#print 'ic = ', ic(testPssm,norm=False) # Biopython Bio.moitf.ic gives 5.27 as the IC
+
 # 3. Write out pickle of the PSSMs for the systematic SELEX experiemnts
 outFile = open('selexPSSMs.pkl','wb')
 cPickle.dump(selexPSSMs,outFile)
 outFile.close()
 
 # 4. Compare motifs to identify non-redundant set
+if not os.path.exists('tmp/tomtom'):
+    os.makedirs('tmp/tomtom')
 outFile = open('upstreamMotifPermutedPValues.csv','w')
 outFile.write('Motif Name,Region,Original E-Value,Consensus,Permuted E-Value < 10,Similar,Total Permutations,Permuted P-Value')
-pssmsNames = pssms.keys()
+pssmsNames = selexPSSMs.keys()
 print 'Making files...'
+tested = []
 for i in range(len(selexPSSMs)):
-    if not os.path.exists('tmp/query'+str(i)+'.tomtom') and not os.path.exists('tmp/target'+str(i)+'.tomtom'):
-        makeFiles(nucFreqs={'A':0.25,'C':0.25,'G':0.25,'T':0.25}, queryPssms=[pssms[pssmsNames[i]]],targetPssms=selexPSSMs,num=100)
+    #print pssmsNames[i]
+    if not os.path.exists('tmp/query'+str(i)+'.tomtom'):
+        makeQueryFile(nucFreqs={'A':0.25,'C':0.25,'G':0.25,'T':0.25}, queryPssms=[selexPSSMs[pssmsNames[i]]],num=i)
+    if not os.path.exists('tmp/target'+str(i)+'.tomtom'):
+        targetPSSMs = []
+        p1 = pssmsNames[i].split('_')
+        if not p1[0].upper()+'_'+p1[3]+'_'+p1[4] in tested:
+            tested.append(p1[0].upper()+'_'+p1[3]+'_'+p1[4])
+            for pssm in pssmsNames:
+                p2 = pssm.split('_')
+                if p1[0].upper()==p2[0].upper() and p1[3]==p2[3] and p1[4]==p2[4] and not pssm==pssmsNames[i]:
+                    targetPSSMs.append(selexPSSMs[pssm])
+        makeTargetFile(nucFreqs={'A':0.25,'C':0.25,'G':0.25,'T':0.25}, targetPssms=targetPSSMs, num=i)
 print 'Done.'
 
 # Run this using all cores available
 cpus = cpu_count()
-print 'There are', cpus,'CPUs avialable.' 
+print 'There are', cpus,'CPUs avialable.'
+#runTomTom(0)
 pool = Pool(processes=cpus)
-pool.map(runTomtom,range(len(pssms)))
+pool.map(runTomTom,range(len(selexPSSMs)))
 print 'Done with Tomtom runs.\n'
 
-print 'Reading in Tomtom run...'
-for run in range(len(pssms)):
-    tomtomPValues = {}
-    outputFile = open('tmp/tomtom_out/tomtom'+str(run)+'.out','r')
+
+print 'Removing redundancy in PSSMs...'
+redundantPSSMs = []
+for run in range(len(selexPSSMs)):
+    # Open file
+    outputFile = open('tmp/tomtom/tomtom'+str(run)+'.out','r')
     output = outputFile.readlines()
     outputFile.close()
     # Now iterate through output and save data
     output.pop(0) # Get rid of header
-    while len(output)>0:
-        outputLine = output.pop(0).strip().split('\t')
-        if len(outputLine)==9:
-            tomtomPValues[outputLine[1]] = float(outputLine[3])
-    pValues = tomtomPValues.values()
-    similar = 0
-    for pValue in pValues:
-        if float(pValue) <= float(0.05):
-            similar += 1
-    # Write out the results
-    mot = outputLine[0].split('_')[1]
-    permPValues[outputLine[0]] = { mot+'.consensus':str(pssms[outputLine[0]].getConsensusMotif()), mot+'.permutedEV<=10':str(len(pValues)), mot+'.similar':str(similar), mot+'.permPV':str(float(similar)/float(1000)) }
-    if outputLine[0] in upstreamMatches.keys():
-        permPValues[outputLine[0]]['motif1.matches'] = ' '.join(upstreamMatches[outputLine[0]])
-        matched += 1
-    else:
-        permPValues[outputLine[0]][mot+'.matches'] = 'NA'
-    outFile.write('\n'+str(outputLine[0])+',upstream,'+str(pssms[outputLine[0]].getEValue())+','+str(pssms[outputLine[0]].getConsensusMotif())+','+str(len(pValues))+','+str(similar)+','+str(1000)+','+str(float(similar)/float(1000)))
-outFile.close()
+    #Query ID	Target ID	Optimal offset	p-value	E-value	q-value	Overlap	Query consensus	Target consensus	Orientation
+    if len(output)>0:
+        tmpPssms = []
+        # Get ids for redundant motifs
+        for i in range(len(output)):
+            splitUp = output[i].strip().split('\t')
+            if len(tmpPssms)==0:
+                tmpPssms.append(splitUp[0])
+            tmpPssms.append(splitUp[1])
+        # Decision tree for choosing non-redundant examplar
+        # 1. Are there any human TFs?
+        mouseRE = re.compile('^[A-Z][a-z]*$')
+        human = []
+        mouse =  []
+        exemplar = ''
+        for pssm1 in tmpPssms:
+            if mouseRE.match(pssm1):
+                mouse.append(pssm1)
+            else:
+                human.append(pssm1)
+        # If ther are human motifs
+        if len(human)>0:
+            redundantPSSMs += mouse
+            # If there is only one human motif
+            if len(human)==1:
+                exemplar = human[0]
+            # If there is more than one human motif
+            else:
+                # Choose full length
+                full = []
+                dbd = []
+                for pssm1 in human:
+                    if pssm1.split('_')[2]=='full':
+                        full.append(pssm1)
+                    else:
+                        dbd.append(pssm1)
+                # If there is a full length clone motif
+                if len(full)>0:
+                    redundantPSSMs += dbd
+                    # If there is only one
+                    if len(full)==1:
+                        exemplar = full[0]
+                    # If ther are more than one full length clone motif
+                    else:
+                        # Choose the one with the highest information content
+                        top = ''
+                        topIc = ''
+                        for pssm1 in full:
+                            testIc = ic(selexPSSMs[pssm1],norm=True)
+                            if top=='' or testIc>topIc:
+                                top = pssm1
+                                topIc = testIc
+                        redundantPSSMs += [i for i in full if not i==top]
+                        exemplar = top
+                else:
+                    if len(dbd)==1:
+                        exemplar = dbd[0]
+                    else:
+                        # Choose the one with the highest information content
+                        top = ''
+                        topIc = ''
+                        for pssm1 in dbd:
+                            testIc = ic(selexPSSMs[pssm1],norm=True)
+                            if top=='' or testIc>topIc:
+                                top = pssm1
+                                topIc = testIc
+                        redundantPSSMs += [i for i in dbd if not i==top]
+                        exemplar = top
+        else:
+            # Choose full length
+            full = []
+            dbd = []
+            for pssm1 in mouse:
+                if pssm1.split('_')[2]=='full':
+                    full.append(pssm1)
+                else:
+                    dbd.append(pssm1)
+            # If there is a full length clone motif
+            if len(full)>0:
+                redundantPSSMs += dbd
+                # If there is only one
+                if len(full)==1:
+                    exemplar = full[0]
+                # If ther are more than one full length clone motif
+                else:
+                    # Choose the one with the highest information content
+                    top = ''
+                    topIc = ''
+                    for pssm1 in full:
+                        testIc = ic(selexPSSMs[pssm1],norm=True)
+                        if top=='' or testIc>topIc:
+                            top = pssm1
+                            topIc = testIc
+                    redundantPSSMs += [i for i in full if not i==top]
+                    exemplar = top
+            else:
+                if len(dbd)==1:
+                    exemplar = dbd[0]
+                else:
+                    # Choose the one with the highest information content
+                    top = ''
+                    topIc = ''
+                    for pssm1 in dbd:
+                        testIc = ic(selexPSSMs[pssm1],norm=True)
+                        if top=='' or testIc>topIc:
+                            top = pssm1
+                            topIc = testIc
+                    redundantPSSMs += [i for i in dbd if not i==top]
+                    exemplar = top
+        #print exemplar, len(tmpPssms)
+
+# Now clean out redundant PSSMs
+for pssm1 in redundantPSSMs:
+    del selexPSSMs[pssm1]
+print 'Non-redundant PSSMs: ',len(selexPSSMs)
+pklFile = open('selexPSSMsNonRedundant.pkl','wb')
+cPickle.dump(selexPSSMs, pklFile)
+pklFile.close()
 
