@@ -37,7 +37,7 @@ def makeTargetFile(nucFreqs, targetPssms, num, strands='+ -'):
     targetFile.close()
 
 # Run TomTom on the files
-def TomTom(num, distMeth='ed', qThresh='0.05', minOverlap=6):
+def TomTom(num, distMeth='ed', qThresh='1', minOverlap=6):
     # Arguments for tomtom
     tomtomArgs = ' -dist '+str(distMeth)+' -o tmp/tomtom_out -text -thresh '+str(qThresh)+' -min-overlap '+str(minOverlap)+' tmp/query'+str(num)+'.tomtom tmp/target'+str(num)+'.tomtom'
     #print tomtomArgs
@@ -53,7 +53,7 @@ def TomTom(num, distMeth='ed', qThresh='0.05', minOverlap=6):
 
 # Wrapper function to run TomTom using multiprocessing pool
 def runTomTom(i):
-    TomTom(i, distMeth='ed', qThresh='0.001', minOverlap=6) #blic5
+    TomTom(i, distMeth='ed', qThresh='1', minOverlap=6) #blic5
 
 # Method returning the information content of a motif.
 def ic(pssm,norm=True):
@@ -173,9 +173,11 @@ for run in range(len(selexPSSMs)):
         # Get ids for redundant motifs
         for i in range(len(output)):
             splitUp = output[i].strip().split('\t')
-            if len(tmpPssms)==0:
-                tmpPssms.append(splitUp[0])
-            tmpPssms.append(splitUp[1])
+            # P-value cutoff
+            if float(splitUp[3])<=0.00001:
+                if len(tmpPssms)==0:
+                    tmpPssms.append(splitUp[0])
+                tmpPssms.append(splitUp[1])
         # Decision tree for choosing non-redundant examplar
         # 1. Are there any human TFs?
         mouseRE = re.compile('^[A-Z][a-z]*$')
